@@ -1,0 +1,120 @@
+<enunciado>
+  <objetivo>
+  Diseñar e implementar un sistema de recomendación de películas basado en contenido que, para cada usuario,
+  produzca una lista de 5 películas relevantes.
+  </objetivo>
+
+  <datos>
+    <dato>
+    Se dispone del corpus mathigatti/spanish_imdb_synopsis, que contiene aproximadamente 4.970 películas con sinopsis en español,
+    keywords, género, año y director. Está disponible en el archivo data/plots.csv dentro de este repositorio.
+    </dato>
+
+    <dato>
+    Se provee, además, el archivo data/user_profiles.csv con 14 perfiles de usuario simulados. Cada perfil contiene un historial
+    de 5 películas vistas y una query en lenguaje natural que expresa lo que el usuario quiere ver a continuación.
+    Los perfiles varían en cohesión: algunos tienen preferencias claras y consistentes; otros presentan historiales dispersos y queries poco específicas.
+    </dato>
+  </datos>
+
+  <contexto_tecnico>
+    <descripcion>
+    Datos reales verificados en el repositorio. Cualquier rol que diseñe o implemente debe atenerse a estos esquemas exactos.
+    </descripcion>
+    <fuente ruta="data/plots.csv">
+      <filas_aprox>4970</filas_aprox>
+      <columnas>description, keywords, genre, year, name, director</columnas>
+      <nota>description es la sinopsis en español; keywords y genre vienen como cadenas separadas por comas (mezcla de español e inglés); year es float; pueden existir valores nulos o sinopsis vacías/cortas.</nota>
+    </fuente>
+    <fuente ruta="data/user_profiles.csv">
+      <filas>14</filas>
+      <columnas>id, nombre, tipo_perfil, pelicula_1, pelicula_2, pelicula_3, pelicula_4, pelicula_5, query</columnas>
+      <nota>tipo_perfil etiqueta la cohesión del perfil (p. ej. "definido" vs. perfiles más dispersos); los títulos del historial deben matchearse contra la columna name de plots.csv y pueden no encontrarse todos.</nota>
+    </fuente>
+    <stack>
+      <runtime>Python &gt;=3.13</runtime>
+      <dependencias>pandas, huggingface-hub, ipykernel; se permite agregar scikit-learn, numpy, transformers/sentence-transformers, spaCy o nltk según la estrategia elegida.</dependencias>
+      <entorno>El proyecto usa uv; el entregable de código es un Jupyter Notebook reproducible.</entorno>
+    </stack>
+  </contexto_tecnico>
+
+  <puntos_clave>
+    <orientacion>
+    A continuación se presentan algunas preguntas para orientar el trabajo. No es necesario responderlas todas en forma de lista:
+    deben integrarse en el desarrollo del informe y del notebook.
+    </orientacion>
+
+    <corpus>
+      <pregunta>
+      ¿Qué información está disponible para representar cada película? ¿Toda es igualmente útil para la tarea?
+      </pregunta>
+      <pregunta>
+      ¿Qué tan completo y limpio es el corpus, y qué consecuencias tiene eso sobre el sistema que se puede construir?
+      </pregunta>
+      <pregunta>
+      ¿Qué limitaciones estructurales del corpus condicionan las decisiones metodológicas posteriores?
+      </pregunta>
+    </corpus>
+
+    <representacion>
+      <pregunta>
+      ¿Cómo hacer para que películas similares queden cerca en el espacio vectorial? ¿Qué entiende el sistema por "similitud"
+      y es eso lo mismo que entiende un usuario? ¿Qué se pierde y qué se gana con la representación elegida?
+      </pregunta>
+      <pregunta>
+      ¿Habría sido mejor otra representación para este corpus y esta tarea?
+      </pregunta>
+    </representacion>
+
+    <modelado_usuario>
+      <pregunta>
+      ¿Cómo representar lo que un usuario quiere ver? ¿El historial y la query aportan el mismo tipo de información?
+      </pregunta>
+      <pregunta>
+      ¿Cómo combinarlas? ¿Debería el sistema tratar igual a un usuario con preferencias claras que a uno con historial disperso?
+      </pregunta>
+      <pregunta>
+      ¿Qué pasa cuando las dos fuentes de información apuntan en direcciones distintas?
+      </pregunta>
+    </modelado_usuario>
+
+    <resultados>
+      <pregunta>
+      ¿Las recomendaciones tienen sentido para cada usuario? ¿Hay casos donde el sistema claramente acierta y casos donde falla?
+      </pregunta>
+      <pregunta>
+      ¿A qué se deben esas diferencias: al usuario, al corpus, a la representación, a la forma de combinar las señales?
+      </pregunta>
+      <pregunta>
+      ¿Qué hace el sistema cuando no hay señal clara?
+      </pregunta>
+    </resultados>
+
+    <evaluacion>
+      <pregunta>
+      ¿Cómo saber si el sistema recomienda bien con los datos disponibles? ¿Esa métrica es igualmente válida para todos los perfiles?
+      </pregunta>
+      <pregunta>
+      ¿Qué información no se está usando y podría mejorar el sistema?
+      </pregunta>
+      <pregunta>
+      ¿Qué limitaciones tiene un sistema puramente basado en contenido que no podría resolverse con más datos del mismo tipo?
+      </pregunta>
+    </evaluacion>
+  </puntos_clave>
+
+  <entregables>
+    <entregable>
+    Dos estrategias de representación distintas, con análisis explícito de sus diferencias.
+    </entregable>
+    <entregable>
+    Notebook reproducible con outputs ejecutados.
+    </entregable>
+    <entregable>
+    Informe en PDF (máximo 10 páginas sin contar código ni outputs).
+    </entregable>
+    <entregable>
+    Exposición de 10 minutos de los principales resultados.
+    </entregable>
+  </entregables>
+</enunciado>

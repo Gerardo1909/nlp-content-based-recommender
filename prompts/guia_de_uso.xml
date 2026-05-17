@@ -1,0 +1,56 @@
+<guia_de_uso>
+  <proposito>
+  Manual de ejecución iterativo para usar los prompts especializados del directorio prompts/ durante el
+  desarrollo del TP. Cada rol vive en su propio archivo y se usa como prompt de sistema en una sesión
+  dedicada (o cambiando de contexto). El objetivo es maximizar precisión y rigor mediante un flujo
+  multi-agente con bucles de crítica.
+  </proposito>
+
+  <archivos>
+    <archivo nombre="enunciado.xml">Prompt base: objetivo, datos reales, preguntas clave y entregables. Es la fuente de verdad; se adjunta a casi todos los roles.</archivo>
+    <archivo nombre="01_arquitecto.xml">Diseño conceptual y matemático. No produce código.</archivo>
+    <archivo nombre="02_ingeniero.xml">Implementación del notebook reproducible.</archivo>
+    <archivo nombre="03_redactor_cientifico.xml">Redacción del informe PDF ≤10 páginas.</archivo>
+    <archivo nombre="04_evaluador.xml">Control de calidad crítico (el profesor). Se usa al final de cada fase.</archivo>
+  </archivos>
+
+  <principios>
+    <principio>Una sesión = un rol. No mezcles roles en el mismo chat para evitar contaminación de contexto.</principio>
+    <principio>Adjunta siempre enunciado.xml como fuente de verdad, salvo que el paso indique lo contrario.</principio>
+    <principio>El Evaluador cierra cada fase antes de avanzar a la siguiente. No pases de fase con hallazgos bloqueantes abiertos.</principio>
+    <principio>Versiona los artefactos (diseño v1, v2…) para poder pasar al Evaluador la versión exacta que criticas.</principio>
+  </principios>
+
+  <fase numero="1" nombre="Diseño">
+    <paso orden="1" rol="01_arquitecto.xml">Entrada: enunciado.xml. Pide las dos estrategias de representación, el preprocesamiento en español, la combinación matemática historial+query y la métrica de similitud. Salida: especificación v1.</paso>
+    <paso orden="2" rol="04_evaluador.xml">Entrada: enunciado.xml + especificación v1. Indica que se revisa la fase de Diseño. Salida: lista priorizada de hallazgos.</paso>
+    <paso orden="3" rol="01_arquitecto.xml">Entrada: especificación v1 + hallazgos del Evaluador. Salida: especificación final validada.</paso>
+    <salida>Especificación arquitectónica final sin hallazgos bloqueantes.</salida>
+  </fase>
+
+  <fase numero="2" nombre="Implementación">
+    <paso orden="4" rol="02_ingeniero.xml">Entrada: enunciado.xml + especificación final. Pide el notebook por módulos: EDA, Preprocesamiento, Vectorización, Modelado de usuario, Similitud/ranking, Evaluación.</paso>
+    <paso orden="5" rol="02_ingeniero.xml">Ejecuta el notebook localmente (uv). Si hay errores o resultados subóptimos, vuelve a este rol aportando los tracebacks o las tablas obtenidas.</paso>
+    <paso orden="6" rol="04_evaluador.xml">Entrada: enunciado.xml + notebook ejecutado. Indica que se revisa la fase de Implementación. Foco: data leakage, reproducibilidad, dos estrategias comparables.</paso>
+    <salida>Notebook reproducible con outputs ejecutados y top-5 por perfil para ambas estrategias.</salida>
+  </fase>
+
+  <fase numero="3" nombre="Redacción">
+    <paso orden="7" rol="03_redactor_cientifico.xml">Entrada: enunciado.xml + especificación final + outputs del notebook + tus conclusiones al ejecutarlo. Salida: borrador del informe por secciones.</paso>
+    <paso orden="8" rol="04_evaluador.xml">Entrada: enunciado.xml + borrador del informe. Foco: límite de 10 páginas, cobertura de las 5 preguntas clave, afirmaciones sustentadas por outputs.</paso>
+    <paso orden="9" rol="03_redactor_cientifico.xml">Entrada: borrador + hallazgos. Salida: informe final.</paso>
+    <salida>Informe PDF ≤10 páginas, narrativo, sustentado en resultados reales.</salida>
+  </fase>
+
+  <fase numero="4" nombre="Revisión final y exposición">
+    <paso orden="10" rol="04_evaluador.xml">Entrada: enunciado.xml + notebook final + informe final. Pide una evaluación global contra todos los entregables y un veredicto inequívoco.</paso>
+    <paso orden="11" rol="03_redactor_cientifico.xml">Refina los puntos débiles señalados y, a partir de las fortalezas validadas por el Evaluador, extrae el guion de la exposición de 10 minutos.</paso>
+    <salida>Entregables finales: dos estrategias contrastadas, notebook, informe y guion de exposición.</salida>
+  </fase>
+
+  <bucles_criticos>
+    <bucle>Arquitecto ↔ Evaluador hasta cerrar hallazgos bloqueantes de diseño (no implementar antes).</bucle>
+    <bucle>Ingeniero ↔ ejecución local hasta que el notebook corra end-to-end de forma robusta.</bucle>
+    <bucle>Redactor ↔ Evaluador hasta que el informe cubra las 5 preguntas dentro del límite de páginas.</bucle>
+  </bucles_criticos>
+</guia_de_uso>
