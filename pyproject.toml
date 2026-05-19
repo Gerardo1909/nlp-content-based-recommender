@@ -9,4 +9,12 @@ dependencies = [
     "huggingface-hub>=1.15.0",
     "ipykernel>=7.2.0",
     "pandas>=3.0.3",
+    "scikit-learn>=1.6.0",
+    "numpy>=2.0.0",
+    "sentence-transformers>=3.0.0",
+    "spacy>=3.8.0",
+    "nltk>=3.9.0",
+    "rapidfuzz>=3.0.0",
+    "matplotlib>=3.9.0",
+    "jupytext>=1.16.0", # uv run jupytext --to notebook notebook.py
 ]
