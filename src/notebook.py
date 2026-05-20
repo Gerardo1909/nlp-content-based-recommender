@@ -46,7 +46,7 @@ PLOTS_PATH    = os.path.join(DATA_DIR, "plots.csv")
 PROFILES_PATH = os.path.join(DATA_DIR, "user_profiles.csv")
 
 # Umbral fuzzy: justificado por la tabla de precisión/recall en §2.1
-FUZZY_THRESHOLD  = 0.90
+FUZZY_THRESHOLD  = 0.80
 FUZZY_GREY_ZONE  = 0.05
 
 # SHA pinneado del snapshot del modelo en HuggingFace Hub.
