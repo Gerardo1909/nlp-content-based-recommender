@@ -914,6 +914,104 @@ for label, recs_df, M in [("A (TF-IDF)", recs_A, M_A), ("B (Embeddings)", recs_B
             div.append(diversidad_lista(idxs, M))
     print(f"{label}: diversidad@5≈{np.mean(div):.3f}  cobertura={len(recomendadas)/len(plots):.3f}")
 
+def evaluar_satisfaccion_query(recs_df, plots_df, model, nlp, name_to_idx, top_k=5):
+    """
+    Calcula la Métrica de Satisfacción de la Query (MSQ) para un set de recomendaciones.
+    Mide:
+      - Similitud Semántica (coseno entre embedding de query y embedding de las recomendaciones).
+      - Match Léxico/Género (proporción de lemas clave de la query presentes en la película).
+    """
+    resultados = []
+    
+    # Extraemos todos los géneros únicos del catálogo para hacer match inteligente
+    todos_los_generos = set()
+    for g_list in plots_df["genre"].fillna("").str.lower().str.split(","):
+        todos_los_generos.update([g.strip() for g in g_list if g.strip()])
+
+    for _, row in recs_df.iterrows():
+        query_text = str(row.get("query", "") or "")
+        if not query_text.strip():
+            continue
+            
+        # 1. PREPARACIÓN DE LA QUERY
+        # Componente Semántico: Embedding de la query
+        v_query = model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)[0]
+        
+        # Componente Léxico: Lematizamos la query y buscamos si menciona géneros del corpus
+        doc_q = nlp(query_text.lower())
+        lemas_query = {t.lemma_ for t in doc_q if not t.is_stop and not t.is_punct and len(t.lemma_) > 2}
+        
+        # Detectar si alguna palabra de la query refiere a un género (ej: "romántica" -> "romance")
+        # Usamos una heurística simple de sub-string o coincidencia exacta
+        generos_buscados = {g for g in todos_los_generos if any(g in lema or lema in g for lema in lemas_query)}
+
+        sims_semanticas = []
+        matches_lexicos = []
+        matches_genero = []
+
+        # 2. EVALUAR CADA UNA DE LAS RECOMENDACIONES (Top-K)
+        for j in range(1, top_k + 1):
+            peli_name = row.get(f"rec_{j}")
+            if pd.isna(peli_name) or peli_name not in name_to_idx:
+                continue
+                
+            idx_peli = name_to_idx[peli_name]
+            peli_row = plots_df.iloc[idx_peli]
+            
+            # --- Evaluación Semántica ---
+            # Coseno entre la query y el embedding ya calculado de la película (E_B)
+            v_peli = E_B[idx_peli]  # Usa la matriz global E_B cargada en tu entorno
+            sim_semantica = float(v_query @ v_peli)
+            sims_semanticas.append(sim_semantica)
+            
+            # --- Evaluación de Género Directo ---
+            peli_genres = [g.strip().lower() for g in str(peli_row.get("genre", "")).split(",")]
+            if generos_buscados:
+                # Si la query pedía géneros, ¿la peli los tiene?
+                tiene_genero = int(any(g in peli_genres for g in generos_buscados))
+                matches_genero.append(tiene_genero)
+            
+            # --- Evaluación Léxica Expandida (Keywords/Sinopsis) ---
+            # ¿Cuántos de los conceptos/lemas que pidió el usuario aparecen en la peli?
+            texto_peli_proc = str(peli_row.get("text_proc_A", "")).split()
+            if lemas_query:
+                coincidencias = lemas_query.intersection(texto_peli_proc)
+                score_lexico = len(coincidencias) / len(lemas_query)
+                matches_lexicos.append(score_lexico)
+
+        # 3. CONSOLIDAR MEDIAS PARA EL PERFIL
+        resultados.append({
+            "id": row["id"],
+            "nombre": row["nombre"],
+            "tipo_perfil": row["tipo_perfil"],
+            "MSQ_Semantica": np.mean(sims_semanticas) if sims_semanticas else 0.0,
+            "MSQ_Lexica": np.mean(matches_lexicos) if matches_lexicos else 0.0,
+            "MSQ_Genero": np.mean(matches_genero) if matches_genero else (1.0 if not generos_buscados else 0.0)
+        })
+        
+    return pd.DataFrame(resultados)
+
+# %%
+# Ejecutamos la nueva métrica sobre tus dos estrategias actuales
+print("Calculando satisfacción de Query para Estrategia A...")
+msq_A = evaluar_satisfaccion_query(recs_A, plots, model_B, nlp_model, name_to_idx)
+
+print("Calculando satisfacción de Query para Estrategia B...")
+msq_B = evaluar_satisfaccion_query(recs_B, plots, model_B, nlp_model, name_to_idx)
+
+# Comparativa resumida por estrategia y tipo de perfil
+for label, df_msq in [("A (TF-IDF)", msq_A), ("B (Embeddings)", msq_B)]:
+    print(f"\n=== MÉTRICAS MSQ PARA {label} ===")
+    print(f"  Global Semántica: {df_msq['MSQ_Semantica'].mean():.3f}")
+    print(f"  Global Léxica:    {df_msq['MSQ_Lexica'].mean():.3f}")
+    print(f"  Global Género:    {df_msq['MSQ_Genero'].mean():.3f}")
+    
+    # Segmentado por tipo de perfil (Definido vs Ambiguo)
+    for tipo in df_msq["tipo_perfil"].unique():
+        sub = df_msq[df_msq["tipo_perfil"] == tipo]
+        print(f"    ↳ [{tipo}] Semántica: {sub['MSQ_Semantica'].mean():.3f} | Género: {sub['MSQ_Genero'].mean():.3f}")
+
+
 # %% [markdown]
 # Dos cosas para leer acá: (1) **B recomienda listas bastante menos diversas** que A
 # (diversidad@5 más baja): tiende a agrupar películas muy parecidas entre sí. (2) La **cobertura
