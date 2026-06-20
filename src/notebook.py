@@ -28,11 +28,6 @@
 # %% [markdown]
 # ## 0. Configuración y reproducibilidad
 #
-# Fijamos una semilla única para que todo lo que tenga azar (sobre todo el baseline aleatorio)
-# dé igual en cada corrida. También definimos las rutas y dos constantes que vamos a justificar
-# más adelante: el umbral de *fuzzy matching* (0.80, ver §2) y el modelo de embeddings, pinneado
-# a un SHA fijo de HuggingFace para que los vectores sean siempre los mismos.
-
 # %%
 import os
 import random
@@ -276,6 +271,7 @@ print(f"Conectados al catálogo (score ≥ {FUZZY_THRESHOLD}): {n_ok} ({n_ok/len
 
 # %%
 import re
+import unicodedata
 import nltk
 
 nltk.download("stopwords", quiet=True)
@@ -286,6 +282,107 @@ STOPWORDS_ES = set(nltk_sw.words("spanish"))
 DOMAIN_SW = {"película", "pelicula", "historia", "film", "filme",
              "hombre", "mujer", "año", "vida", "vez", "día", "mundo"}
 STOPWORDS = STOPWORDS_ES | DOMAIN_SW
+
+def normalize_genre(g: str) -> str:
+    """Normaliza un género: sin acentos, minúsculas, sin puntuación."""
+    if not g or not isinstance(g, str):
+        return ""
+    g = unicodedata.normalize("NFKD", g).encode("ascii", "ignore").decode("ascii")
+    g = g.lower().strip()
+    g = re.sub(r"[^a-z0-9 ]", "", g)
+    return re.sub(r"\s+", " ", g).strip()
+
+def parse_movie_genres(genre_str: str) -> list[str]:
+    """Parsea y normaliza géneros separados por coma."""
+    if not genre_str or not isinstance(genre_str, str):
+        return []
+    return [g_norm for g in genre_str.split(",") if (g_norm := normalize_genre(g))]
+
+def detect_query_genres(query: str, all_genres: list[str]) -> list[str]:
+    """Devuelve los géneros del corpus que aparecen explícitamente en la query.
+    Compara en texto normalizado (sin acentos, minúsculas). Prefiere matches más largos."""
+    q_norm = normalize_genre(query)
+    if not q_norm:
+        return []
+    padded = f" {q_norm} "
+    return [g for g in sorted(all_genres, key=len, reverse=True) if f" {g} " in padded]
+
+def genre_query_metric(recs_df: pd.DataFrame, genre_map: dict, all_genres: list[str],
+                       top_k: int = 5) -> pd.DataFrame:
+    """Métrica 1 — Genre-Query-Hit@5.
+    Solo sobre queries que mencionan explícitamente al menos un género del corpus.
+    hit = 1 si ese género aparece en alguna de las top_k recomendaciones.
+    genre_query_count@5 = cuántas de las top_k películas tienen el género buscado."""
+    rows = []
+    for _, rec in recs_df.iterrows():
+        query = str(rec.get("query", "") or "")
+        query_genres = detect_query_genres(query, all_genres)
+        if not query_genres:
+            continue
+        query_genre_set = set(query_genres)
+        rec_genres: set[str] = set()
+        match_count = 0
+        for i in range(1, top_k + 1):
+            movie = rec.get(f"rec_{i}")
+            if pd.notna(movie):
+                movie_genres = genre_map.get(str(movie), set())
+                rec_genres.update(movie_genres)
+                if query_genre_set & movie_genres:
+                    match_count += 1
+        matched = sorted(query_genre_set & rec_genres)
+        rows.append({
+            "id": rec["id"],
+            "nombre": rec["nombre"],
+            "tipo_perfil": rec["tipo_perfil"],
+            "query_genres": ", ".join(query_genres),
+            "rec_genres": ", ".join(sorted(rec_genres)),
+            "matched_genres": ", ".join(matched),
+            "genre_query_count@5": match_count,
+            "genre_query_hit@5": int(bool(matched)),
+        })
+    return pd.DataFrame(rows)
+
+def genre_history_metric(recs_df: pd.DataFrame, profiles_df: pd.DataFrame,
+                         genre_map: dict, top_k: int = 5) -> pd.DataFrame:
+    """Métrica 2 — Genre-Hist-Hit@5.
+    Género dominante = el que más veces aparece en el historial efectivo del usuario
+    (en empate, se consideran todos los empatados).
+    hit = 1 si algún género dominante aparece en las top_k recomendaciones."""
+    from collections import Counter
+    hist_cols = [f"pelicula_{i}" for i in range(1, 6)]
+    rows = []
+    for _, rec in recs_df.iterrows():
+        uid = rec["id"]
+        profile = profiles_df[profiles_df["id"] == uid].iloc[0]
+        hist_genres: list[str] = []
+        for col in hist_cols:
+            title = profile.get(col)
+            if pd.notna(title):
+                idx = fuzzy_lookup(str(title))
+                if idx is not None:
+                    hist_genres.extend(genre_map.get(plots.iloc[idx]["name"], set()))
+        if not hist_genres:
+            continue
+        genre_counts = Counter(hist_genres)
+        max_count = max(genre_counts.values())
+        dominant = {g for g, c in genre_counts.items() if c == max_count}
+        rec_genres: set[str] = set()
+        for i in range(1, top_k + 1):
+            movie = rec.get(f"rec_{i}")
+            if pd.notna(movie):
+                rec_genres.update(genre_map.get(str(movie), set()))
+        matched = sorted(dominant & rec_genres)
+        rows.append({
+            "id": uid,
+            "nombre": rec["nombre"],
+            "tipo_perfil": rec["tipo_perfil"],
+            "hist_dominant_genres": ", ".join(sorted(dominant)),
+            "max_genre_count": max_count,
+            "rec_genres": ", ".join(sorted(rec_genres)),
+            "matched_genres": ", ".join(matched),
+            "genre_hist_hit@5": int(bool(matched)),
+        })
+    return pd.DataFrame(rows)
 
 def _clean_text(text: str) -> str:
     """Minúsculas y se queda solo con letras españolas y espacios."""
@@ -322,6 +419,14 @@ print(f"Películas low_confidence (<{MIN_DESC_LEN} chars): "
 
 # Texto base compartido por ambas estrategias.
 plots["text_raw"] = plots.apply(build_corpus_text, axis=1)
+plots["genre_list"] = plots["genre"].map(parse_movie_genres)
+MOVIE_GENRE_MAP = {
+    str(row["name"]): set(row["genre_list"])
+    for _, row in plots.iterrows()
+}
+ALL_GENRES = sorted({g for genres in MOVIE_GENRE_MAP.values() for g in genres})
+print(f"Géneros únicos normalizados en el corpus: {len(ALL_GENRES)}")
+print("Géneros:", ALL_GENRES)
 
 # %%
 # Lematización para A. Procesamos en batches con nlp.pipe (mucho más rápido que uno por uno).
@@ -660,7 +765,7 @@ print("=== TOP-5 por perfil — A (TF-IDF) vs B (Embeddings) ===\n")
 for _, ra in recs_A.iterrows():
     rb = recs_B[recs_B["id"] == ra["id"]].iloc[0]
     print(f"[{ra['id']}] {ra['nombre']} | {ra['tipo_perfil']} | "
-          f"α={ra['alpha']} | dispersión={ra['dispersion']}")
+          f"α_A={ra['alpha']} | disp_A={ra['dispersion'] } | α_B={rb['alpha']} | disp_B={rb['dispersion']}")
     if ra["fallback_flag"]:
         print(f"  ⚑ {ra['fallback_flag']}")
     print(f"  Query: {str(ra['query'])[:90]}")
@@ -824,14 +929,118 @@ for label, loo_df in [("A (TF-IDF)", loo_A), ("B (Embeddings)", loo_B),
                       ("Baseline centralidad", loo_cent)]:
     valid = loo_df[loo_df["rank_held"].notna()]
     results.append({"Sistema": label,
-                    "Recall@5": f"{recall_at_5(valid):.3f}",
-                    "MRR": f"{mrr(valid):.3f}"})
+                    "Recall@5": f"{recall_at_5(valid):.5f}",
+                    "MRR": f"{mrr(valid):.5f}"})
 results.append({"Sistema": "Baseline aleatorio", "Recall@5": "~0",
                 "MRR": f"{mrr_random:.5f} (teórico)"})
 
 results_df = pd.DataFrame(results)
 print("=== RESULTADOS GLOBALES ===")
 print(results_df.to_string(index=False))
+
+# %% [markdown]
+# ### Métricas de géneros
+#
+# Para complementar Recall@5 y MRR, definimos dos métricas independientes basadas en los
+# géneros del catálogo. Ambas miden si las 5 recomendaciones son coherentes en términos de
+# género, pero desde ángulos distintos.
+#
+# **Métrica 1 — Genre-Query-Hit@5 (señal declarada):** ¿menciona el usuario un género
+# explícitamente en su query (p. ej. "comedia", "acción", "animación")? Si lo hace, ¿ese
+# género aparece en al menos una de las 5 recomendaciones? Solo se calcula sobre queries que
+# contienen al menos un género del corpus; primero se reporta cuántas queries (de 14) caen
+# en ese grupo.
+#
+# **Métrica 2 — Genre-Hist-Hit@5 (señal revelada):** ¿hay un género que se repita en el
+# historial del usuario? El *género dominante* es el más frecuente entre todos los géneros
+# de las películas del historial efectivo (si hay empate, se consideran todos los empatados).
+# ¿Ese género dominante aparece en al menos una de las 5 recomendaciones?
+#
+# En ambas métricas un "hit" vale 1 si la intersección entre géneros buscados y géneros
+# recomendados es no vacía; el score final es la fracción de hits sobre los casos aplicables.
+
+# %%
+# Detección de queries con género explícito (igual para A y B; se imprime una sola vez).
+_qdet_check = genre_query_metric(recs_A, MOVIE_GENRE_MAP, ALL_GENRES)
+print(f"=== QUERIES CON GÉNERO EXPLÍCITO ===")
+print(f"Total usuarios: {len(recs_A)}")
+print(f"Queries con al menos un género del corpus: {len(_qdet_check)} "
+      f"({len(_qdet_check)/len(recs_A):.0%})\n")
+for _, r in _qdet_check.iterrows():
+    print(f"  [{r['id']}] {r['nombre']} ({r['tipo_perfil']})")
+    print(f"    Géneros detectados en query: {r['query_genres']}")
+
+# %%
+genre_query_rows, genre_hist_rows = [], []
+for label, recs_df in [("A (TF-IDF)", recs_A), ("B (Embeddings)", recs_B)]:
+    qdet = genre_query_metric(recs_df, MOVIE_GENRE_MAP, ALL_GENRES)
+    hdet = genre_history_metric(recs_df, profiles, MOVIE_GENRE_MAP)
+
+    q_hit = float(qdet["genre_query_hit@5"].mean()) if len(qdet) else 0.0
+    h_hit = float(hdet["genre_hist_hit@5"].mean()) if len(hdet) else 0.0
+
+    q_count_mean = float(qdet["genre_query_count@5"].mean()) if len(qdet) else 0.0
+    genre_query_rows.append({
+        "Sistema": label,
+        "Queries con género explícito": len(qdet),
+        "Genre-Query-Hit@5": f"{q_hit:.3f}",
+        "Recs con género (media)": f"{q_count_mean:.2f}",
+    })
+    genre_hist_rows.append({
+        "Sistema": label,
+        "Usuarios con historial efectivo": len(hdet),
+        "Genre-Hist-Hit@5": f"{h_hit:.3f}",
+    })
+    qdet.to_csv(os.path.join(ARTIFACTS_DIR, f"genre_query_{label.split()[0]}.csv"), index=False)
+    hdet.to_csv(os.path.join(ARTIFACTS_DIR, f"genre_hist_{label.split()[0]}.csv"), index=False)
+
+genre_query_df = pd.DataFrame(genre_query_rows)
+genre_hist_df  = pd.DataFrame(genre_hist_rows)
+
+print("\n=== MÉTRICA 1 — GÉNERO EXPLÍCITO EN QUERY (Genre-Query-Hit@5) ===")
+print(genre_query_df.to_string(index=False))
+print()
+print("Detalle por query (Estrategia A):")
+qdet_A = genre_query_metric(recs_A, MOVIE_GENRE_MAP, ALL_GENRES)
+for _, r in qdet_A.iterrows():
+    print(f"  [{r['id']}] {r['nombre']}: buscado={r['query_genres']} | "
+          f"en recomendadas={r['matched_genres'] or '—'} | "
+          f"películas con ese género={r['genre_query_count@5']}/5 | hit={r['genre_query_hit@5']}")
+print()
+print("Detalle por query (Estrategia B):")
+qdet_B = genre_query_metric(recs_B, MOVIE_GENRE_MAP, ALL_GENRES)
+for _, r in qdet_B.iterrows():
+    print(f"  [{r['id']}] {r['nombre']}: buscado={r['query_genres']} | "
+          f"en recomendadas={r['matched_genres'] or '—'} | "
+          f"películas con ese género={r['genre_query_count@5']}/5 | hit={r['genre_query_hit@5']}")
+
+print("\n=== MÉTRICA 2 — GÉNERO DOMINANTE EN HISTORIAL (Genre-Hist-Hit@5) ===")
+print(genre_hist_df.to_string(index=False))
+print()
+print("Detalle por usuario (Estrategia A):")
+hdet_A = genre_history_metric(recs_A, profiles, MOVIE_GENRE_MAP)
+for _, r in hdet_A.iterrows():
+    print(f"  [{r['id']}] {r['nombre']}: dominante={r['hist_dominant_genres']} "
+          f"(x{r['max_genre_count']}) | en recomendadas={r['matched_genres'] or '—'} | "
+          f"hit={r['genre_hist_hit@5']}")
+print()
+print("Detalle por usuario (Estrategia B):")
+hdet_B = genre_history_metric(recs_B, profiles, MOVIE_GENRE_MAP)
+for _, r in hdet_B.iterrows():
+    print(f"  [{r['id']}] {r['nombre']}: dominante={r['hist_dominant_genres']} "
+          f"(x{r['max_genre_count']}) | en recomendadas={r['matched_genres'] or '—'} | "
+          f"hit={r['genre_hist_hit@5']}")
+
+# Segmentación por tipo_perfil
+print("\n=== SEGMENTACIÓN POR tipo_perfil ===")
+for tipo in sorted(profiles["tipo_perfil"].unique()):
+    print(f"\n  --- {tipo} ---")
+    for label, qdet, hdet in [("A (TF-IDF)", qdet_A, hdet_A), ("B (Embeddings)", qdet_B, hdet_B)]:
+        q_sub = qdet[qdet["tipo_perfil"] == tipo]
+        h_sub = hdet[hdet["tipo_perfil"] == tipo]
+        q_score = f"{q_sub['genre_query_hit@5'].mean():.3f} (n={len(q_sub)})" if len(q_sub) else "sin queries con género"
+        h_score = f"{h_sub['genre_hist_hit@5'].mean():.3f} (n={len(h_sub)})" if len(h_sub) else "sin datos"
+        print(f"    {label}: Genre-Query-Hit@5={q_score} | Genre-Hist-Hit@5={h_score}")
 
 # %% [markdown]
 # ### ¿Vale la métrica para todos los perfiles? Segmentación por tipo
@@ -925,6 +1134,8 @@ for label, recs_df, M in [("A (TF-IDF)", recs_A, M_A), ("B (Embeddings)", recs_B
 loo_A.to_csv(os.path.join(ARTIFACTS_DIR, "loo_A.csv"), index=False)
 loo_B.to_csv(os.path.join(ARTIFACTS_DIR, "loo_B.csv"), index=False)
 results_df.to_csv(os.path.join(ARTIFACTS_DIR, "results_table.csv"), index=False)
+genre_query_df.to_csv(os.path.join(ARTIFACTS_DIR, "genre_query_metrics.csv"), index=False)
+genre_hist_df.to_csv(os.path.join(ARTIFACTS_DIR, "genre_hist_metrics.csv"), index=False)
 print("Tablas de evaluación guardadas en artifacts/")
 
 # %% [markdown]
